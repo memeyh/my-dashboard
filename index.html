@@ -1,0 +1,749 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useMemo } from 'react';
+import { 
+  LayoutDashboard, 
+  Monitor, 
+  Cpu, 
+  ShieldCheck, 
+  CreditCard, 
+  Users, 
+  ChevronRight, 
+  Search,
+  Package,
+  HardDrive,
+  Info,
+  Presentation,
+  Download
+} from 'lucide-react';
+import { 
+  BarChart, 
+  Bar, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer, 
+  PieChart, 
+  Pie, 
+  Cell,
+  Legend
+} from 'recharts';
+import { motion, AnimatePresence } from 'motion/react';
+import { HARDWARE_DATA, SOFTWARE_DATA, HardwareAsset, SoftwareAsset } from './data';
+import { cn } from './lib/utils';
+import { downloadPPTX } from './lib/pptxExport';
+import SlideDeck from './components/SlideDeck';
+
+const COLORS = ['#2563eb', '#3b82f6', '#60a5fa', '#93c5fd', '#dbeafe'];
+const ENTITY_COLORS: Record<string, string> = {
+  'PHN': '#3b82f6',
+  'HDSB': '#10b981',
+  'HTS': '#f59e0b',
+  'HESB': '#8b5cf6',
+};
+
+const CATEGORY_COLORS: Record<string, string> = {
+  'CAD': '#6366f1',
+  'CAE': '#10b981',
+  'CAM': '#f59e0b',
+  'CAI': '#ec4899',
+  'PDM/PLM': '#8b5cf6',
+  'Productivity': '#94a3b8',
+};
+
+const MetricCard = ({ title, value, icon: Icon, description, trend, colorClass }: any) => (
+  <motion.div 
+    initial={{ opacity: 0, y: 20 }}
+    animate={{ opacity: 1, y: 0 }}
+    className="sleek-card p-5"
+  >
+    <div className="flex justify-between items-start mb-4">
+      <div className={cn("p-2.5 rounded-lg bg-opacity-10", colorClass)}>
+        <Icon size={20} className={colorClass.replace('bg-', 'text-')} />
+      </div>
+      {trend && (
+        <span className={cn("text-xs font-semibold", trend > 0 ? "text-emerald-500" : "text-rose-500")}>
+          {trend > 0 ? '+' : ''}{trend}%
+        </span>
+      )}
+    </div>
+    <h3 className="text-slate-500 text-xs font-medium uppercase tracking-wider mb-1">{title}</h3>
+    <div className="flex items-baseline gap-2">
+      <span className="text-2xl font-bold text-slate-900">{value}</span>
+    </div>
+    {description && <p className="text-slate-400 text-[10px] mt-2">{description}</p>}
+  </motion.div>
+);
+
+export default function App() {
+  const [selectedEntity, setSelectedEntity] = useState<string>('Global');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [activeTab, setActiveTab] = useState<'overview' | 'audit' | 'software'>('overview');
+  const [showSlides, setShowSlides] = useState(false);
+
+  const entities = ['Global', 'HESB', 'PHN', 'HTS', 'HDSB'];
+
+  // Software Audit Calculations
+  const softwareAuditData = useMemo(() => {
+    const byEntity: Record<string, SoftwareAsset[]> = {};
+    const byName: Record<string, string[]> = {};
+    const activeStats: Record<string, { active: number; inactive: number; total: number }> = {};
+    const categoryStats: Record<string, number> = {};
+    let globalActive = 0;
+    let globalInactive = 0;
+
+    SOFTWARE_DATA.forEach(s => {
+      // By Entity
+      if (!byEntity[s.entity]) byEntity[s.entity] = [];
+      byEntity[s.entity].push(s);
+
+      // By Name (to find groups)
+      if (!byName[s.name]) byName[s.name] = [];
+      if (!byName[s.name].includes(s.entity)) byName[s.name].push(s.entity);
+
+      // Active Stats
+      if (!activeStats[s.entity]) activeStats[s.entity] = { active: 0, inactive: 0, total: 0 };
+      activeStats[s.entity].total++;
+      if (s.status === 'Active') {
+        activeStats[s.entity].active++;
+        globalActive++;
+      } else {
+        activeStats[s.entity].inactive++;
+        globalInactive++;
+      }
+
+      // Category Stats
+      categoryStats[s.category] = (categoryStats[s.category] || 0) + 1;
+    });
+
+    const redundant = Object.entries(byName)
+      .filter(([_, groups]) => groups.length > 1)
+      .map(([name, groups]) => ({ name, groups }));
+
+    // Sort byEntity by cost descending for "Top 5"
+    Object.keys(byEntity).forEach(entity => {
+      byEntity[entity].sort((a, b) => b.cost - a.cost);
+    });
+
+    return { byEntity, byName, redundant, activeStats, categoryStats, globalActive, globalInactive };
+  }, []);
+
+  const filteredHardware = useMemo(() => {
+    let data = HARDWARE_DATA;
+    if (selectedEntity !== 'Global') {
+      data = data.filter(h => h.entity === selectedEntity);
+    }
+    if (searchTerm) {
+      const lowerSearch = searchTerm.toLowerCase();
+      data = data.filter(h => 
+        h.user.toLowerCase().includes(lowerSearch) || 
+        h.model.toLowerCase().includes(lowerSearch) ||
+        h.assetId.toLowerCase().includes(lowerSearch)
+      );
+    }
+    return data;
+  }, [selectedEntity, searchTerm]);
+
+  const filteredSoftware = useMemo(() => {
+    let data = SOFTWARE_DATA;
+    if (selectedEntity !== 'Global') {
+      data = data.filter(s => s.entity === selectedEntity);
+    }
+    if (searchTerm) {
+      const lowerSearch = searchTerm.toLowerCase();
+      data = data.filter(s => 
+        s.name.toLowerCase().includes(lowerSearch) || 
+        s.supplier.toLowerCase().includes(lowerSearch)
+      );
+    }
+    return data;
+  }, [selectedEntity, searchTerm]);
+
+  // Calculations
+  const hardwareStats = useMemo(() => {
+    const byEntity: Record<string, HardwareAsset[]> = {};
+    HARDWARE_DATA.forEach(h => {
+      if (!byEntity[h.entity]) byEntity[h.entity] = [];
+      byEntity[h.entity].push(h);
+    });
+    return { byEntity };
+  }, []);
+
+  const totalHardwareCost = useMemo(() => filteredHardware.reduce((sum, h) => sum + h.cost, 0), [filteredHardware]);
+  const totalSoftwareCost = useMemo(() => filteredSoftware.reduce((sum, s) => sum + s.cost, 0), [filteredSoftware]);
+  const totalAssets = filteredHardware.length;
+  const totalUsers = new Set(filteredHardware.map(h => h.user)).size;
+
+  const hardwareByStatus = useMemo(() => {
+    const counts = filteredHardware.reduce((acc: any, h) => {
+      acc[h.status] = (acc[h.status] || 0) + 1;
+      return acc;
+    }, {});
+    return Object.entries(counts).map(([name, value]) => ({ name, value }));
+  }, [filteredHardware]);
+
+  const costByCategory = useMemo(() => {
+    const counts = filteredSoftware.reduce((acc: any, s) => {
+      acc[s.category] = (acc[s.category] || 0) + s.cost;
+      return acc;
+    }, {});
+    return Object.entries(counts).map(([name, value]) => ({ name, value }));
+  }, [filteredSoftware]);
+
+  const costByEntity = useMemo(() => {
+    return entities.filter(e => e !== 'Global').map(entity => {
+      const swCost = SOFTWARE_DATA.filter(s => s.entity === entity).reduce((sum, s) => sum + s.cost, 0);
+      return { name: entity, Software: swCost };
+    });
+  }, [entities]);
+
+  return (
+    <div className="min-h-screen bg-brand-bg font-sans text-slate-900 flex">
+      {showSlides && (
+        <SlideDeck 
+          data={{
+            softwareAuditData,
+            costByCategory,
+            costByEntity,
+            totalSoftwareCost,
+            globalActive: softwareAuditData.globalActive,
+            globalInactive: softwareAuditData.globalInactive,
+            softwareCount: SOFTWARE_DATA.length
+          }}
+          onClose={() => setShowSlides(false)}
+        />
+      )}
+      {/* Sidebar - Sleek Navi Color */}
+      <aside className="w-64 bg-[#0f172a] text-slate-400 hidden lg:flex flex-col sticky top-0 h-screen shrink-0">
+        <div className="p-8">
+          <div className="flex items-center gap-3 mb-10">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+              <Cpu className="text-white" size={18} />
+            </div>
+            <span className="font-bold text-lg tracking-tight text-white">AssetGuard</span>
+          </div>
+
+          <nav className="space-y-1">
+            <button 
+              onClick={() => setActiveTab('overview')}
+              className={cn(
+                "w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all group",
+                activeTab === 'overview' ? "bg-slate-800 text-white" : "hover:bg-slate-800/50 hover:text-slate-200"
+              )}
+            >
+              <LayoutDashboard size={18} className={cn(activeTab === 'overview' ? "text-indigo-400" : "text-slate-500 group-hover:text-slate-400")} />
+              Overview
+            </button>
+            <button 
+              onClick={() => setActiveTab('audit')}
+              className={cn(
+                "w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all group",
+                activeTab === 'audit' ? "bg-slate-800 text-white" : "hover:bg-slate-800/50 hover:text-slate-200"
+              )}
+            >
+              <ShieldCheck size={18} className={cn(activeTab === 'audit' ? "text-indigo-400" : "text-slate-500 group-hover:text-slate-400")} />
+              Software Audit
+            </button>
+            <button 
+              onClick={() => setActiveTab('software')}
+              className={cn(
+                "w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all group",
+                activeTab === 'software' ? "bg-slate-800 text-white" : "hover:bg-slate-800/50 hover:text-slate-200"
+              )}
+            >
+              <Package size={18} className={cn(activeTab === 'software' ? "text-indigo-400" : "text-slate-500 group-hover:text-slate-400")} />
+              Software Inventory
+            </button>
+            <button 
+              onClick={() => setShowSlides(true)}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all group hover:bg-slate-800/50 hover:text-slate-200"
+            >
+              <Presentation size={18} className="text-slate-500 group-hover:text-slate-400" />
+              Presentation mode
+            </button>
+            <button 
+              onClick={() => downloadPPTX({
+                softwareAuditData,
+                costByCategory,
+                totalSoftwareCost,
+                globalActive: softwareAuditData.globalActive,
+                globalInactive: softwareAuditData.globalInactive,
+                softwareCount: SOFTWARE_DATA.length
+              })}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all group hover:bg-slate-800/50 hover:text-slate-200"
+            >
+              <Download size={18} className="text-slate-500 group-hover:text-slate-400" />
+              Download PPTX
+            </button>
+          </nav>
+
+          <div className="mt-12">
+            <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em] px-4 mb-4">Entities</h4>
+            <div className="space-y-1">
+              {entities.map(entity => (
+                <button 
+                  key={entity}
+                  onClick={() => setSelectedEntity(entity)}
+                  className={cn(
+                    "w-full text-left px-4 py-2 rounded-lg text-sm transition-all",
+                    selectedEntity === entity ? "text-white font-semibold" : "text-slate-500 hover:text-slate-300"
+                  )}
+                >
+                  {entity}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-auto p-8 border-t border-slate-800/50">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 font-bold text-xs">AR</div>
+            <div>
+              <p className="text-xs font-semibold text-white">Alex Rivera</p>
+              <p className="text-[10px] text-slate-500 uppercase tracking-tighter">System Admin</p>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex-1 flex flex-col min-w-0">
+        {/* Top Header Bar */}
+        <header className="h-[72px] bg-white border-b border-brand-border flex items-center justify-between px-8 sticky top-0 z-10 shrink-0">
+          <div className="flex items-center gap-2">
+            <h2 className="text-base font-semibold text-slate-800">
+              System Overview
+            </h2>
+            <ChevronRight size={14} className="text-slate-400" />
+            <span className="text-slate-500 text-sm font-medium">{selectedEntity}</span>
+          </div>
+
+          <div className="flex items-center gap-6">
+            <div className="relative hidden md:block">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+              <input 
+                type="text" 
+                placeholder="Search assets..."
+                className="pl-9 pr-4 py-1.5 bg-brand-bg border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 w-64 transition-all"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </div>
+          </div>
+        </header>
+
+        <div className="p-8 overflow-auto flex-1">
+          {activeTab === 'audit' && (
+            <div className="space-y-6">
+              {/* Row 1: Active Stats and Redundancy */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Active/Inactive Stats */}
+                <div className="sleek-card p-6">
+                  <h3 className="text-sm font-semibold text-slate-800 uppercase tracking-wider mb-6">Group License Status</h3>
+                  <div className="space-y-6">
+                    {(Object.entries(softwareAuditData.activeStats) as [string, {active: number; inactive: number; total: number}][]).map(([entity, stats]) => (
+                      <div key={entity} className="space-y-3">
+                        <div className="flex justify-between items-end text-sm">
+                          <div className="flex items-center gap-2">
+                             <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: ENTITY_COLORS[entity] || '#cbd5e1' }} />
+                             <div>
+                               <span className="font-bold text-slate-800 block text-xs">{entity}</span>
+                               <span className="text-[10px] text-slate-400 font-medium uppercase tracking-tight">{stats.total} Total Licenses</span>
+                             </div>
+                          </div>
+                          <div className="text-right">
+                             <span className="text-emerald-500 font-bold text-xs">{stats.active} Active</span>
+                             <span className="text-slate-300 mx-1.5">•</span>
+                             <span className="text-slate-400 font-bold text-xs">{stats.inactive} Inactive</span>
+                          </div>
+                        </div>
+                        <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden flex">
+                          <motion.div 
+                            initial={{ width: 0 }}
+                            animate={{ width: `${(stats.active / stats.total) * 100}%` }}
+                            className="h-full bg-emerald-500" 
+                          />
+                          <motion.div 
+                            initial={{ width: 0 }}
+                            animate={{ width: `${(stats.inactive / stats.total) * 100}%` }}
+                            className="h-full bg-slate-200" 
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Redundancy Tracker */}
+                <div className="sleek-card p-6 border-rose-100 bg-rose-50/10">
+                  <div className="flex items-center gap-2 mb-6 text-rose-600">
+                    <Info size={16} />
+                    <h3 className="text-sm font-semibold uppercase tracking-wider">Redundant Software</h3>
+                  </div>
+                  <div className="space-y-3">
+                    {(softwareAuditData.redundant as {name: string, groups: string[]}[]).map(item => (
+                      <div key={item.name} className="flex justify-between items-center p-3 bg-white rounded-lg border border-rose-100 shadow-sm">
+                        <span className="text-sm font-semibold text-slate-800">{item.name}</span>
+                        <div className="flex gap-1">
+                          {item.groups.map(g => (
+                            <span key={g} className="px-2 py-0.5 rounded bg-slate-100 text-[9px] font-bold text-slate-600">
+                              {g}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Row 2: Software -> Group Mapping */}
+              <div className="sleek-card p-6">
+                <h3 className="text-sm font-semibold text-slate-800 uppercase tracking-wider mb-6">Software Deployment Map</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {(Object.entries(softwareAuditData.byName) as [string, string[]][]).map(([name, groups]) => (
+                    <div key={name} className="p-4 rounded-lg bg-slate-50 border border-slate-100">
+                      <p className="text-sm font-bold text-slate-800 mb-2 truncate">{name}</p>
+                      <div className="flex flex-wrap gap-2">
+                        {groups.map(group => (
+                          <div key={group} className="flex items-center gap-1.5 px-2 py-1 rounded bg-white border border-slate-200 text-[10px] font-medium">
+                            <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: ENTITY_COLORS[group] || '#cbd5e1' }} />
+                            {group}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Row 3: Detail by Group */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {entities.filter(e => e !== 'Global').map(entity => (
+                  <div key={entity} className="sleek-card overflow-hidden">
+                    <div className="p-4 border-b border-slate-100 bg-slate-50/50">
+                      <h4 className="font-bold text-xs text-slate-800 uppercase tracking-widest">{entity} Software Stack</h4>
+                    </div>
+                    <div className="divide-y divide-slate-50 max-h-80 overflow-auto">
+                      {(softwareAuditData.byEntity[entity] || []).map(s => (
+                        <div key={s.id} className="p-3 flex justify-between items-center text-xs">
+                          <div>
+                            <p className="font-semibold text-slate-700">{s.name}</p>
+                            <p className="text-slate-400 text-[10px]">{s.category}</p>
+                          </div>
+                          <span className={cn(
+                            "px-2 py-0.5 rounded text-[9px] font-bold uppercase",
+                            s.status === 'Active' ? "bg-emerald-100 text-emerald-700" :
+                            s.status === 'Inactive' ? "bg-rose-100 text-rose-700" :
+                            "bg-amber-100 text-amber-700"
+                          )}>
+                            {s.status}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'overview' && (
+            <div className="space-y-6">
+              {/* Top Metrics Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                <MetricCard 
+                  title="Total Software Cost" 
+                  value={`RM ${totalSoftwareCost.toLocaleString()}`} 
+                  icon={ShieldCheck} 
+                  colorClass="bg-indigo-500"
+                  trend={4.8}
+                  description="Annualized licensing value"
+                />
+                <MetricCard 
+                  title="Top Category" 
+                  value={costByCategory.length > 0 ? costByCategory.sort((a: any, b: any) => b.value - a.value)[0].name : 'N/A'} 
+                  icon={Package} 
+                  colorClass="bg-emerald-500"
+                  description="Highest spend sector"
+                />
+                <MetricCard 
+                  title="Software Assets" 
+                  value={filteredSoftware.length} 
+                  icon={Package} 
+                  colorClass="bg-amber-500"
+                  description={`${softwareAuditData.globalActive} Active • ${softwareAuditData.globalInactive} Inactive`}
+                />
+                <MetricCard 
+                  title="Compliance Status" 
+                  value={`${Math.round((softwareAuditData.globalActive / filteredSoftware.length) * 100)}%`} 
+                  icon={ShieldCheck} 
+                  colorClass="bg-indigo-600"
+                  description="Licenses currently in utilization"
+                />
+              </div>
+
+              {/* Charts Grid */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2 sleek-card p-6">
+                  <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-sm font-semibold text-slate-800 uppercase tracking-wider">Software Spend by Entity</h3>
+                    <span className="text-[10px] text-slate-400 font-medium">AUDIT DATA 2024</span>
+                  </div>
+                  <div className="h-72 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={costByEntity}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                        <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 10, fill: '#94a3b8'}} />
+                        <YAxis axisLine={false} tickLine={false} tick={{fontSize: 10, fill: '#94a3b8'}} />
+                        <Tooltip 
+                          contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}
+                          formatter={(value: any) => `RM ${value.toLocaleString()}`}
+                        />
+                        <Bar dataKey="Software" fill="#6366f1" radius={[4, 4, 0, 0]} barSize={40} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                <div className="sleek-card p-6 flex flex-col">
+                  <h3 className="text-sm font-semibold text-slate-800 uppercase tracking-wider mb-6">Spend by Category</h3>
+                  <div className="flex-1 h-60">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={costByCategory}
+                          innerRadius={55}
+                          outerRadius={75}
+                          paddingAngle={8}
+                          dataKey="value"
+                        >
+                          {costByCategory.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={Object.values(CATEGORY_COLORS)[index % Object.values(CATEGORY_COLORS).length]} stroke="rgba(255,255,255,0.2)" />
+                          ))}
+                        </Pie>
+                        <Tooltip 
+                           contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0' }}
+                           formatter={(value: any) => `RM ${value.toLocaleString()}`}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="mt-4 pt-6 border-t border-slate-50 space-y-3">
+                    {costByCategory.map((cat, index) => (
+                      <div key={cat.name} className="flex justify-between items-center text-[10px]">
+                        <div className="flex items-center gap-2">
+                          <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: Object.values(CATEGORY_COLORS)[index % Object.values(CATEGORY_COLORS).length] }} />
+                          <span className="text-slate-500 font-medium">{cat.name}</span>
+                        </div>
+                        <span className="font-bold text-slate-800">RM {cat.value.toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Entity Panels */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                {entities.filter(e => e !== 'Global' && (softwareAuditData.byEntity[e]?.length > 0 || hardwareStats.byEntity[e]?.length > 0)).map((entity) => {
+                  const items = softwareAuditData.byEntity[entity] || [];
+                  const activeCount = softwareAuditData.activeStats[entity]?.active || 0;
+                  const inactiveCount = softwareAuditData.activeStats[entity]?.inactive || 0;
+                  const totalCost = items.reduce((sum, s) => sum + s.cost, 0);
+                  
+                  return (
+                    <div key={entity} className="sleek-card p-6">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <h4 className="font-bold text-xs tracking-tight text-slate-800">{entity}</h4>
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-50 text-slate-400 font-bold uppercase">Software</span>
+                        </div>
+                        <div className="flex gap-1.5">
+                          <div className="flex items-center gap-1">
+                             <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                             <span className="text-[9px] font-bold text-slate-700">{activeCount}</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                             <div className="w-1.5 h-1.5 rounded-full bg-slate-300" />
+                             <span className="text-[9px] font-bold text-slate-400">{inactiveCount}</span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-4">
+                        <div>
+                          <p className="text-lg font-bold text-slate-900">RM {totalCost.toLocaleString()}</p>
+                          <p className="text-[10px] text-slate-400 uppercase font-medium">Annual Expenditure</p>
+                        </div>
+
+                        <div style={{ height: '4px', width: '100%', background: '#f1f5f9', borderRadius: '2px' }}>
+                          <motion.div 
+                            initial={{ width: 0 }}
+                            animate={{ width: `${(totalCost / totalSoftwareCost) * 100}%` }}
+                            style={{ height: '100%', background: ENTITY_COLORS[entity], borderRadius: '2px' }} 
+                          />
+                        </div>
+
+                        <div className="pt-2 border-t border-slate-50">
+                          <p className="text-[9px] text-slate-400 font-bold uppercase mb-2">Top 5 Software by Cost</p>
+                          <div className="space-y-2">
+                            {items.slice(0, 5).map(item => (
+                              <div key={item.id} className="flex justify-between items-center text-[10px]">
+                                <span className={cn(
+                                  "truncate pr-2 font-medium",
+                                  item.status === 'Active' ? "text-slate-600" : "text-slate-400 line-through"
+                                )}>{item.name}</span>
+                                <span className="text-slate-800 font-bold shrink-0 tabular-nums">RM {item.cost.toLocaleString()}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {(activeTab === 'hardware' || activeTab === 'software') && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="sleek-card overflow-hidden"
+            >
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-brand-border">
+                      <th className="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        {activeTab === 'hardware' ? 'Service / User' : 'Software Asset'}
+                      </th>
+                      <th className="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        {activeTab === 'hardware' ? 'Configuration' : 'Vendor'}
+                      </th>
+                      <th className="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        Status
+                      </th>
+                      <th className="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-wider text-right">
+                        Cost (RM)
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {activeTab === 'hardware' ? (
+                      filteredHardware.map((h) => (
+                        <tr key={h.id} className="hover:bg-slate-50/50 transition-all group">
+                          <td className="px-8 py-4">
+                            <div className="flex items-center gap-4">
+                              <div className="w-8 h-8 rounded-lg bg-brand-bg flex items-center justify-center text-slate-400 transition-colors">
+                                {h.type === 'Desktop' ? <Monitor size={16} /> : <HardDrive size={16} />}
+                              </div>
+                              <div>
+                                <p className="text-sm font-semibold text-slate-800">{h.user}</p>
+                                <p className="text-[10px] text-slate-400 uppercase tracking-tighter">{h.assetId}</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-8 py-4 text-sm">
+                            <p className="font-medium text-slate-600">{h.brand} {h.model}</p>
+                            <p className="text-slate-400 text-[10px] font-mono">{h.specs}</p>
+                          </td>
+                          <td className="px-8 py-4">
+                            <span className={cn(
+                              "sleek-badge",
+                              h.status === 'Leasing' ? "bg-amber-100 text-amber-700" :
+                              h.status === 'Purchase' ? "bg-emerald-100 text-emerald-700" :
+                              "bg-slate-100 text-slate-600"
+                            )}>
+                              {h.status === 'Leasing' ? 'Building' : 'Deployed'}
+                            </span>
+                          </td>
+                          <td className="px-8 py-4 text-right">
+                            <p className="text-sm font-bold text-slate-800 tabular-nums">RM {h.cost.toLocaleString()}</p>
+                            <p className={cn(
+                              "text-[10px] font-bold uppercase tracking-tight",
+                              h.warranty === 'Expired' ? "text-rose-400" : "text-emerald-400"
+                            )}>
+                              {h.warranty === 'Expired' ? 'EOL' : 'Active'}
+                            </p>
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      filteredSoftware.map((s) => (
+                        <tr key={s.id} className="hover:bg-slate-50/50 transition-all">
+                          <td className="px-8 py-4">
+                            <div className="flex items-center gap-4">
+                              <div className="w-8 h-8 rounded-lg bg-brand-bg flex items-center justify-center text-slate-400">
+                                <ShieldCheck size={16} />
+                              </div>
+                              <div>
+                                <p className="text-sm font-semibold text-slate-800">{s.name}</p>
+                                <div className="flex items-center gap-2">
+                                  <p className="text-[10px] text-slate-400 uppercase tracking-tighter">{s.licenseType}</p>
+                                  <span className="text-[8px] px-1 rounded bg-slate-100 text-slate-500 font-bold uppercase">{s.licensingModel}</span>
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-8 py-4">
+                            <p className="text-sm font-medium text-slate-600 font-bold">{s.supplier}</p>
+                            <p className="text-[10px] text-slate-400 truncate max-w-[150px]">Entity: {s.entity} • User: {s.user}</p>
+                          </td>
+                        <td className="px-8 py-4">
+                          <div className="flex flex-col gap-1">
+                            <span className={cn(
+                              "sleek-badge w-fit",
+                              s.category === 'CAD' ? "bg-indigo-100 text-indigo-700" :
+                              s.category === 'CAE' ? "bg-emerald-100 text-emerald-700" :
+                              s.category === 'CAM' ? "bg-amber-100 text-amber-700" :
+                              s.category === 'CAI' ? "bg-pink-100 text-pink-700" :
+                              s.category === 'PDM/PLM' ? "bg-purple-100 text-purple-700" :
+                              "bg-slate-100 text-slate-700"
+                            )}>
+                              {s.category}
+                            </span>
+                            {s.annualPayment && (
+                              <span className="text-[8px] font-bold text-emerald-500 uppercase tracking-tighter flex items-center gap-0.5">
+                                <Info size={8} /> Annual Payment REQ
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                          <td className="px-8 py-4 text-right">
+                            <p className="text-sm font-bold text-slate-800 tabular-nums">RM {s.cost.toLocaleString()}</p>
+                            <span className={cn(
+                              "text-[10px] font-bold uppercase",
+                              s.status === 'Active' ? "text-emerald-500" : "text-rose-500"
+                            )}>{s.status}</span>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </motion.div>
+          )}
+        </div>
+
+        <footer className="h-16 px-8 border-t border-brand-border flex items-center justify-between shrink-0 text-slate-400 text-[10px] font-medium uppercase tracking-widest bg-white">
+          <div className="flex items-center gap-6">
+            <span>Last Sync: 12m ago</span>
+            <span>R&D Audit 2024.1</span>
+          </div>
+          <div className="flex items-center gap-6">
+            <a href="#" className="hover:text-indigo-500 transition-colors">Documentation</a>
+            <a href="#" className="hover:text-indigo-500 transition-colors">Safety Logs</a>
+          </div>
+        </footer>
+      </main>
+    </div>
+  );
+}
